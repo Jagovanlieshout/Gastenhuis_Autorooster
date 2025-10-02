@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Create working directory inside container
-WORKDIR /app
+WORKDIR /web
 
 # Install system dependencies if needed (optional)
 # RUN apt-get update && apt-get install -y build-essential
@@ -24,4 +24,4 @@ COPY . .
 EXPOSE 8000
 
 # Run Flask with Gunicorn (production ready)
-CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "--workers", "2", "--threads", "2", "--timeout", "120", "web.app:app"]
