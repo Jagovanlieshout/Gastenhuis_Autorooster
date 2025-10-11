@@ -56,7 +56,11 @@ def generate_schedule():
         workers_df = read_workers(request.files["workers"])
         vast_rooster_df = read_vast_rooster(request.files["workers"])
         onb_df = read_dataframe(request.files["onb"])
-        prev_df = read_dataframe(request.files["prev_assignments"])
+        # if no prev_assignments provided, set to None
+        if request.files["prev_assignments"].filename == "":
+            prev_df = None
+        else:    
+            prev_df = read_dataframe(request.files["prev_assignments"])
 
         #print(workers_df.head())
         

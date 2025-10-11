@@ -51,25 +51,32 @@ def preprocess_data(df_werknemers: pd.DataFrame, df_onb: pd.DataFrame, prev_assi
                     "duration": row['Duur']
                 })
 
-    # Ensure shift_date is datetime, not string
-    if prev_assignments['shift_date'].dtype == object:
-        prev_assignments['shift_date'] = pd.to_datetime(prev_assignments['shift_date'])
-    
-    #Make employee_id a string, delete everything after the first . (dot)
-    prev_assignments['employee_id'] = prev_assignments['employee_id'].astype(str).apply(lambda x: x.split('.')[0] if '.' in x else x)    
-    
-    # Compute global shift week
-    global_start_date = prev_assignments['shift_date'].min().normalize()
-    # Snap back to Monday if not already Monday
-    global_start_date -= pd.to_timedelta(global_start_date.weekday(), unit="D")
-    
-    # Compute global week for prev_assignments
-    prev_assignments['global_week'] = (
-        (prev_assignments['shift_date'].dt.normalize() - global_start_date).dt.days // 7
-    )
-    
-    # Start date is one day after last assignment date in prev_assignments
-    start_date = prev_assignments['shift_date'].max() + dt.timedelta(days=1)
+    ### Previous assignments processing ###
+    if prev_assignments is not None and not prev_assignments.empty:
+        # Ensure shift_date is datetime, not string
+        if prev_assignments['shift_date'].dtype == object:
+            prev_assignments['shift_date'] = pd.to_datetime(prev_assignments['shift_date'])
+        
+        #Make employee_id a string, delete everything after the first . (dot)
+        prev_assignments['employee_id'] = prev_assignments['employee_id'].astype(str).apply(lambda x: x.split('.')[0] if '.' in x else x)    
+        
+        # Compute global shift week
+        global_start_date = prev_assignments['shift_date'].min().normalize()
+        # Snap back to Monday if not already Monday
+        global_start_date -= pd.to_timedelta(global_start_date.weekday(), unit="D")
+        
+        # Compute global week for prev_assignments
+        prev_assignments['global_week'] = (
+            (prev_assignments['shift_date'].dt.normalize() - global_start_date).dt.days // 7
+        )
+        
+        # Start date is one day after last assignment date in prev_assignments
+        start_date = prev_assignments['shift_date'].max() + dt.timedelta(days=1)
+    else:
+        # If no previous assignments, set start_date to next Monday
+        today = pd.Timestamp(dt.datetime.now().date())
+        start_date = today + pd.to_timedelta((7 - today.weekday()) % 7, unit="D")
+        global_start_date = start_date
     
     
     all_shift_instances = []
@@ -118,6 +125,16 @@ def preprocess_data(df_werknemers: pd.DataFrame, df_onb: pd.DataFrame, prev_assi
     shifts = shifts.reset_index(drop=True)
     shifts['shift_id'] = shifts.index.astype(int)
     
+    # if prev_assignments is None, copy shifts to prev_assignments with correct date range (4 weeks before start_date)
+    if prev_assignments is None or prev_assignments.empty:
+        prev_assignments = shifts.copy()
+        # Change date range to 4 weeks before start_date
+        prev_assignments = prev_assignments[prev_assignments['shift_date'] < start_date]
+        prev_assignments = prev_assignments[prev_assignments['shift_date'] >= start_date - pd.to_timedelta(28, unit='D')]
+        #-4 on global_week due to starting 4 weeks earlier
+        prev_assignments['global_week'] -= 4
+        prev_assignments = prev_assignments.reset_index(drop=True)
+        prev_assignments['employee_id'] = pd.NA  # No assignments yet
     
     print('Shift data loaded')
     # --- Workers ---
