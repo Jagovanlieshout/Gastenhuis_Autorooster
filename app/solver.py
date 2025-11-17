@@ -3,7 +3,6 @@ import pandas as pd
 from ortools.sat.python import cp_model
 import datetime as dt
 
-
 def auto_rooster(data, time_limit_s=60):
     """
     Main function to create an automatic schedule using OR-Tools CP-SAT solver.
@@ -313,15 +312,21 @@ def auto_rooster(data, time_limit_s=60):
             for s in night_shifts:
                 model.Add(x[(s, emp)] == 0)
 
-    # 8) Qualification
+    # 8) Deskundigheid rule
     for _, shift_row in shifts.iterrows():
         sid = int(shift_row['shift_id'])
-        required_quals = shift_row['qualification']
-        if not isinstance(required_quals, list):
-            required_quals = [required_quals]
+
+        # required qualification → take minimum qualification level for shift
+        req_quals = shift_row['qualification']
+        if isinstance(req_quals, list):
+            req_level = min(req_quals)   # e.g., [2,3] → requires at least level 2
+        else:
+            req_level = int(req_quals)
+
         for emp in emp_ids:
-            emp_quals = workers.loc[workers['medewerker_id'] == emp, 'deskundigheid'].iloc[0]
-            if not any(q in emp_quals for q in required_quals):
+            emp_level = workers.loc[workers['medewerker_id'] == emp, 'deskundigheid'].iloc[0]
+            # employee can only work shift if emp_level <= req_level
+            if min(emp_level) > req_level:
                 model.Add(x[(sid, emp)] == 0)
     
     # 9) Use 'nachten' column to enforce the night shift preferences
@@ -422,8 +427,8 @@ def auto_rooster(data, time_limit_s=60):
             d2 = dates_list[i + 2]
             model.Add(work_day[d2] == 0).OnlyEnforceIf([work_day[d], work_day[d1].Not()])
 
-    # 10.6) (602859): 7-on/7-off pattern using dates, respect prev_assignments
-    emp_602859 = '602859'
+    # 10.6) (602859-1): 7-on/7-off pattern using dates, respect prev_assignments
+    emp_602859 = '602859-1'
     if emp_602859 in emp_ids:
         # 1) forbid non-night shifts
         for s in shifts['shift_id']:
@@ -521,10 +526,6 @@ def auto_rooster(data, time_limit_s=60):
     # weekendWorked[(emp, week)] = 1 if employee emp works any shift on Saturday(5) or Sunday(6) in that week
     weekendWorked = {}
     weekend_days = [5, 6]  # day_of_week indices for Saturday and Sunday
-    
-    #only consider employees without 'weekend' in wensen
-    #wensen_map = {emp: str(workers.loc[workers['medewerker_id'] == emp, 'wensen']).lower() for emp in emp_ids}
-    #employees_no_weekend_pref = [e for e in emp_ids if 'weekend' not in wensen_map[e]]
     
 
     # Precompute weekend shift ids per week for speed
@@ -765,6 +766,50 @@ def auto_rooster(data, time_limit_s=60):
                 pen_var = model.NewBoolVar(f"overigNightPenalty_e{emp}_s{s}")
                 model.Add(pen_var == x[(s, emp)])
                 overig_night_penalties.append(pen_var)
+    # 9) Give a small bonus for employees working their preferred shifts
+    preferred_shift_bonus = []
+    
+    for _, r in onb.iterrows():
+        emp = r['Medewerker id']
+        if emp not in emp_ids:
+            continue
+        date_unb = pd.to_datetime(r['Datum']).date()
+        besch = str(r['Beschikbaarheid']).lower()
+        if besch == 'beschikbaar':
+            # find shifts on that date
+            shifts_on_date = shifts_by_date.get(date_unb, [])
+            for s in shifts_on_date:
+                # create a bonus variable
+                bonus_var = model.NewBoolVar(f"bonus_e{emp}_s{s}")
+                model.Add(bonus_var == x[(s, emp)])  # bonus_var = 1 iff employee works shift
+                preferred_shift_bonus.append(bonus_var)
+                
+    # 10) Penalty for deskundigheid level higher than required (to prefer lower levels when possible)
+    deskundigheid_penalties = []
+    for _, shift_row in shifts.iterrows():
+        sid = int(shift_row['shift_id'])
+
+        req_quals = shift_row['qualification']
+        req_level = min(req_quals) if isinstance(req_quals, list) else int(req_quals)
+
+        for emp in emp_ids:
+            emp_level = workers.loc[workers['medewerker_id'] == emp, 'deskundigheid'].iloc[0]
+
+            # Allowed assignments only (because emp_level ≤ req_level)
+            if min(emp_level) <= req_level:
+                diff = req_level - max(emp_level)    # e.g. 3 - 1 = 2
+                penalty_value = diff * diff      # quadratic
+
+                # Create an integer penalty variable for this assignment
+                p = model.NewIntVar(0, penalty_value, f"penalty_s{sid}_e{emp}")
+
+                # Link penalty to assignment:
+                # p = penalty_value * x[sid, emp]
+                # CP-SAT cannot multiply IntVar * IntVar → linearize with AddMultiplicationEquality
+                model.AddMultiplicationEquality(p, [x[(sid, emp)], penalty_value])
+
+                deskundigheid_penalties.append(p)
+        
             
     # Combine all into one objective
     model.Minimize(
@@ -776,7 +821,9 @@ def auto_rooster(data, time_limit_s=60):
         0.5 * sum(rest_after_night_penalties) +         # soft penalty for insufficient rest after night blocks
         0.1 * sum(unequal_shift_penalties) +            # soft penalty for uneven shift type distribution
         0.1 * sum(week_balance_penalties.values()) +   # soft penalty for unequal distribution of shifts per week
-        1 * sum(overig_night_penalties)              # soft penalty for 'overig' night shifts
+        1 * sum(overig_night_penalties) -              # soft penalty for 'overig' night shifts
+        0.1 * sum(preferred_shift_bonus) +              # small bonus for preferred shifts
+        0.1 * sum(deskundigheid_penalties)                 # soft penalty for higher than required deskundigheid
     )
 
     ### Solve ###
@@ -853,6 +900,9 @@ def auto_rooster(data, time_limit_s=60):
         print("Total unequal shift type distribution penalties:", sum(solver.Value(v) for v in unequal_shift_penalties))
         print("Total weekly balance penalties:", sum(solver.Value(v) for v in week_balance_penalties.values()))
         print("Total 'overig' night shift penalties:", sum(solver.Value(v) for v in overig_night_penalties))
+        print("Total preferred shift bonuses:", sum(solver.Value(v) for v in preferred_shift_bonus))
+        print("Total deskundigheid penalties:", sum(solver.Value(v) for v in deskundigheid_penalties))
+        
                 
         # ---- Debug print for weekly distribution ----
         print("\n--- Weekly shift distribution (balanced) ---")
@@ -875,6 +925,11 @@ def auto_rooster(data, time_limit_s=60):
             under_cov = solver.Value(under_coverage_weekend_terms[employees_weekend_pref.index(emp)])
             if under_cov > 0:
                 print(f"Employee {emp} ({workers.loc[workers['medewerker_id'] == emp, 'medewerker_naam'].iloc[0]}): weekend pref under-coverage penalty = {under_cov} minutes")
+        
+        print("All employees with their number of assigned shifts:")
+        for emp in emp_ids:
+            num_assigned = sum(1 for s in shifts['shift_id'] if solver.Value(x[(s, emp)]) == 1)
+            print(f"Employee {emp} ({workers.loc[workers['medewerker_id'] == emp, 'medewerker_naam'].iloc[0]}): assigned shifts = {num_assigned}")
         
         #save to CSV
         assignments_df = pd.DataFrame(assignments)        

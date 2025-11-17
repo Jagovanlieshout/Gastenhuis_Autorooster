@@ -113,22 +113,58 @@
     <p>Upload hier de benodigde bestanden:</p>
 
     <form id="uploadForm" enctype="multipart/form-data">
-        <label>Werknemers (.csv/.xlsx):
-            <input type="file" name="workers" required>
+        <label>Werknemers, rooster template, vast rooster (.csv/.xlsx):
+            <input type="file" name="workers_rooster_template_vast_rooster" required>
         </label>
-        <label>Beschikbaarheid (.csv/.xlsx):
-            <input type="file" name="onb" required>
+        <label>Beschikbaarheid en Vorig rooster (.csv/.xlsx):
+            <input type="file" name="onb_vorig_rooster" required>
         </label>
-        <label>Vorig rooster (.csv/.xlsx) (optioneel):
-            <input type="file" name="prev_assignments">
+        <label>Afdeling:
+            <select name="team_filter" id="team_filter" disabled>
+                <option selected disabled>Upload eerst onbeschikbaarheden...</option>
+            </select>
         </label>
-
         <button type="submit">Rooster Maken</button>
     </form>
 
     <div id="status"></div>
 
     <script>
+    document.querySelector("input[name='onb_vorig_rooster']").addEventListener("change", async function () {
+        const file = this.files[0];
+        const teamSelect = document.getElementById("team_filter");
+
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append("onb_file", file);
+
+        teamSelect.innerHTML = "<option>Teams laden...</option>";
+        teamSelect.disabled = true;
+
+        const response = await fetch("/get_teams", {
+            method: "POST",
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (data.error) {
+            teamSelect.innerHTML = `<option>Error: ${data.error}</option>`;
+            return;
+        }
+
+        // Fill dropdown
+        teamSelect.innerHTML = "<option value=''>-- Alle afdelingen --</option>";
+        data.teams.forEach(team => {
+            const opt = document.createElement("option");
+            opt.value = team;
+            opt.textContent = team;
+            teamSelect.appendChild(opt);
+        });
+
+        teamSelect.disabled = false;
+    });
     document.getElementById("uploadForm").addEventListener("submit", async function (e) {
         e.preventDefault();
         const formData = new FormData(this);

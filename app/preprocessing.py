@@ -3,35 +3,49 @@ import pandas as pd
 import datetime as dt
 import ast
 
-def preprocess_data(df_werknemers: pd.DataFrame, df_onb: pd.DataFrame, prev_assignments: pd.DataFrame, df_vastrooster: pd.DataFrame, num_weeks: int = 4):
+def preprocess_data(df_werknemers: pd.DataFrame, df_rooster_template: pd.DataFrame, df_onb: pd.DataFrame, prev_assignments: pd.DataFrame, df_vastrooster: pd.DataFrame, num_weeks: int = 4):
     """
     Prepares shifts and workers dataframes for the OR-Tools scheduling model.
     Returns processed shifts, workers, and helper structures.
     """
     
-    print("=== PREPROCESSING DATA ===")
-    
+    print("=== PREPROCESSING DATA ===")    
     # --- Shifts ---
-    info_shifts = {
-        "Shifts": ['D1', 'D2', 'D3', 'D4', 'FM', 'GD', 'KOK', 'A1', 'A2', 'A3', 'GA', 'N'],
-        "Begintijd": ['07:00', '07:30', '07:30', '08:45', '08:00', '08:00', '15:00', '15:00', '15:30', '18:30', '16:00', '22:45'],
-        "Eindtijd": ['15:00', '15:00', '14:00', '12:45', '12:30', '14:00', '19:30', '23:00', '22:30', '22:30', '22:00', '07:00'],
-        "Duur": [8, 7.5, 6.5, 4, 4.5, 6, 4.5, 8, 7, 4, 6, 8.25],
-        "Maandag": [1,1,1,1,1,1,1,1,1,1,1,1],
-        "Dinsdag": [1,1,1,1,1,1,1,1,1,1,1,1],
-        "Woensdag": [1,1,1,1,1,1,1,1,1,1,1,1],
-        "Donderdag": [1,1,1,0,1,1,1,1,1,1,1,1],
-        "Vrijdag": [1,1,1,1,0,1,1,1,1,1,1,1],
-        "Zaterdag": [1,1,1,0,0,1,1,1,1,1,1,1],
-        "Zondag": [1,1,1,1,0,1,1,1,1,0,1,1],
-        "Deskundigheden": [[1,2], [2], [3], [3], [6], [4], [5], [2], [3], [3], [4], [2]]
-    }
+    # Loading from rooster_template
+    # Standardize column names for convenience
+    df_rooster_template.columns = [
+        "Shifts", "actie", "Begintijd", "Eindtijd", "Deskundigheid",
+        "Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag",
+        "Zaterdag", "Zondag"
+    ]
 
-    for i in range(len(info_shifts['Shifts'])):
-        info_shifts['Begintijd'][i] = dt.datetime.strptime(info_shifts['Begintijd'][i], '%H:%M').time()
-        info_shifts['Eindtijd'][i] = dt.datetime.strptime(info_shifts['Eindtijd'][i], '%H:%M').time()
-        
-    df_shifts = pd.DataFrame(info_shifts)
+    # Keep only rows where actie == 'plannen'
+    df_shifts = df_rooster_template[df_rooster_template["actie"].str.lower() == "plannen"].copy()
+    df_shifts = df_shifts.reset_index(drop=True)
+
+    # Convert "Ja"/"Nee" → 1/0
+    day_cols = ["Maandag","Dinsdag","Woensdag","Donderdag","Vrijdag","Zaterdag","Zondag"]
+    df_shifts[day_cols] = df_shifts[day_cols].replace({"Ja": 1, "Nee": 0})
+
+    # Convert time strings into datetime.time
+    df_shifts["Begintijd"] = pd.to_datetime(df_shifts["Begintijd"], format="%H:%M:%S").dt.time
+    df_shifts["Eindtijd"] = pd.to_datetime(df_shifts["Eindtijd"], format="%H:%M:%S").dt.time
+
+    # Convert deskundigheid field: extract numeric code
+    # Example: "2. Verzorgende" → 2
+    df_shifts["Deskundigheid"] = df_shifts["Deskundigheid"].astype(str).str.extract(r"(\d+)").astype(int)
+
+    # Convert to list format (your code expects: [2], or sometimes multiple)
+    df_shifts["Deskundigheid"] = df_shifts["Deskundigheid"].apply(lambda x: [x])
+
+    # Compute duration in hours
+    df_shifts["Duur"] = (
+        pd.to_datetime(df_shifts["Eindtijd"].astype(str)) -
+        pd.to_datetime(df_shifts["Begintijd"].astype(str))
+    ).dt.total_seconds() / 3600
+
+    # Fix negative durations (crosses midnight)
+    df_shifts.loc[df_shifts["Duur"] < 0, "Duur"] += 24
 
     # Convert to long format: each row = one shift on one day
     days = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag']
@@ -47,31 +61,68 @@ def preprocess_data(df_werknemers: pd.DataFrame, df_onb: pd.DataFrame, prev_assi
                     "day_of_week": day_map[day],  # 0=Monday, etc.
                     "start_time": row['Begintijd'],
                     "end_time": row['Eindtijd'],
-                    "qualification": row['Deskundigheden'],
+                    "qualification": row['Deskundigheid'],
                     "duration": row['Duur']
                 })
 
     ### Previous assignments processing ###
     if prev_assignments is not None and not prev_assignments.empty:
-        # Ensure shift_date is datetime, not string
-        if prev_assignments['shift_date'].dtype == object:
-            prev_assignments['shift_date'] = pd.to_datetime(prev_assignments['shift_date'])
+        df = prev_assignments.copy()
+        print("Processing previous assignments:")
+        print(df.head())
+
+        #drop medewerker id if exists
+        if 'Medewerker id' in df.columns:
+            df = df.drop(columns=['Medewerker id'])
+            
         
-        #Make employee_id a string, delete everything after the first . (dot)
-        prev_assignments['employee_id'] = prev_assignments['employee_id'].astype(str).apply(lambda x: x.split('.')[0] if '.' in x else x)    
+        # --- 1. Rename columns from actual schedule to scheduler format ---
+        df = df.rename(columns={
+            "Mw_id": "employee_id",
+            "Datum dienst": "shift_date",
+            "Dienst": "shift_name",
+            "Dienst starttijd": "start_time",
+            "Dienst eindtijd": "end_time"
+        })
+
+        # --- 2. Parse dates and times ---
+        df["shift_date"] = pd.to_datetime(df["shift_date"], dayfirst=True)
+        df["start_time"] = pd.to_datetime(df["start_time"], format="%H:%M").dt.time
+        df["end_time"] = pd.to_datetime(df["end_time"], format="%H:%M").dt.time
+
+        # --- 3. Add scheduler fields ---
+        df["shift_id"] = range(len(df))
+        df['is_night'] = df['start_time'].apply(lambda t: t.hour >= 22 or t.hour < 6)
+        df["shift_filled"] = True
+        df["qualification"] = pd.NA
+        df["deskundigheid"] = pd.NA
+
+        # Duration in minutes
+        df["duration_min"] = (
+            pd.to_datetime(df["end_time"].astype(str)) -
+            pd.to_datetime(df["start_time"].astype(str))
+        ).dt.total_seconds() / 60
+        # Fix negative durations (crosses midnight)
+        df.loc[df["duration_min"] < 0, "duration_min"] += 24 * 60
+
+        # --- 4. Compute day_of_week and absolute_day ---
+        df = df.sort_values("shift_date").reset_index(drop=True)
+        first_day = df["shift_date"].min().normalize()
+        df["day_of_week"] = df["shift_date"].dt.weekday
+        df["absolute_day"] = (df["shift_date"].dt.normalize() - first_day).dt.days
+
+        # --- 5. Compute relative week ---
+        df["week"] = df["absolute_day"] // 7
+
+        # --- 6. Compute global_week like scheduler ---
+        global_start_date = first_day - pd.to_timedelta(first_day.weekday(), unit="D")
+        df["global_week"] = ((df["shift_date"].dt.normalize() - global_start_date).dt.days // 7)
+
+        prev_assignments = df
+
+        # --- 7. Set start_date for the next scheduling period ---
+        start_date = prev_assignments["shift_date"].max() + dt.timedelta(days=1)
         
-        # Compute global shift week
-        global_start_date = prev_assignments['shift_date'].min().normalize()
-        # Snap back to Monday if not already Monday
-        global_start_date -= pd.to_timedelta(global_start_date.weekday(), unit="D")
-        
-        # Compute global week for prev_assignments
-        prev_assignments['global_week'] = (
-            (prev_assignments['shift_date'].dt.normalize() - global_start_date).dt.days // 7
-        )
-        
-        # Start date is one day after last assignment date in prev_assignments
-        start_date = prev_assignments['shift_date'].max() + dt.timedelta(days=1)
     else:
         # If no previous assignments, set start_date to next Monday
         today = pd.Timestamp(dt.datetime.now().date())
@@ -141,9 +192,6 @@ def preprocess_data(df_werknemers: pd.DataFrame, df_onb: pd.DataFrame, prev_assi
     workers = df_werknemers.copy().reset_index(drop=True)
     workers['medewerker_id'] = workers['medewerker_id'].astype(str)
     
-    # Change werknemers_id to delete every 0 at the start and everything and including the first -
-    workers['medewerker_id'] = workers['medewerker_id'].apply(lambda x: x.lstrip('0').split('-')[0])
-    
     # delete all rows where wensen = niet plannen
     workers = workers[workers['wensen'] != 'niet plannen']
     workers = workers.reset_index(drop=True)
@@ -204,34 +252,44 @@ def preprocess_data(df_werknemers: pd.DataFrame, df_onb: pd.DataFrame, prev_assi
     )
     
     print('Worker data loaded')
-        
     # Create IDs
     emp_ids = workers['medewerker_id'].tolist()
     #emp_ids = [str(e) for e in emp_ids]
     emp_index = {emp: i for i, emp in enumerate(emp_ids)}
     
+    # --- onbeschikbaarheid ---
+    df_onb = df_onb.copy().reset_index(drop=True)
+    # drop Medewerker id, change Mw_id to Medewerker id
+    df_onb = df_onb.drop(columns=['Medewerker id'], errors='ignore')
+    df_onb = df_onb.rename(columns={'Mw_id':'Medewerker id'})
+    
     # --- Constant schedule integration ---
     if df_vastrooster is not None and not df_vastrooster.empty:
         # Normalize employee_id
-        df_vastrooster['medewerker_id'] = df_vastrooster['medewerker_id'].astype(str).apply(lambda x: x.lstrip('0').split('-')[0])
+        df_vastrooster['medewerker_id'] = df_vastrooster['medewerker_id'].astype(str)
+        
         # Map day name
         day_map_const = {'maandag':0,'dinsdag':1,'woensdag':2,'donderdag':3,'vrijdag':4,'zaterdag':5,'zondag':6}
         df_vastrooster['day_of_week'] = df_vastrooster['dag'].map(day_map_const)
         # Compute shift_date
         df_vastrooster['shift_date'] = start_date + pd.to_timedelta((df_vastrooster['weekvolgnr']-1)*7 + df_vastrooster['day_of_week'], unit='D')
+        
         # Map to shift_id in shifts_constant
         def find_shift_id(row):
             matches = shifts_constant[(shifts_constant['shift_name']==row['dienst']) & (shifts_constant['day_of_week']==row['day_of_week'])]
             return matches['shift_id'].iloc[0] if not matches.empty else None
         df_vastrooster['shift_id'] = df_vastrooster.apply(find_shift_id, axis=1)
+        
         # Append to df_onb
         df_const_unavail = df_vastrooster[['medewerker_id','shift_date','shift_id']].copy()
-        df_const_unavail = df_const_unavail.rename(columns={'medewerker_id':'Medewerker id','shift_date':'Datum'})
+        df_const_unavail = df_const_unavail.rename(columns={'medewerker_id':'Medewerker id','shift_date':'Datum beschikbaarheid'})
         df_const_unavail['Beschikbaarheid'] = 'Niet beschikbaar (constant schedule)'
-        df_const_unavail['Beschikbaarheid_tijd_vanaf'] = pd.NaT
-        df_const_unavail['Beschikbaarheid_tijd_tm'] = pd.NaT
-        df_onb = pd.concat([df_onb, df_const_unavail[['Medewerker id','Datum','Beschikbaarheid','Beschikbaarheid_tijd_vanaf','Beschikbaarheid_tijd_tm']]], ignore_index=True)
-
+        # beschikbaarheid tijd vanaf and t/m set to entire day
+        df_const_unavail['Beschikbaarheid tijd vanaf'] = pd.to_datetime('00:00', format='%H:%M').time()
+        df_const_unavail['Beschikbaarheid tijd t/m'] = pd.to_datetime('23:59', format='%H:%M').time()
+        
+        df_onb = pd.concat([df_onb, df_const_unavail[['Medewerker id','Datum beschikbaarheid', 'Beschikbaarheid','Beschikbaarheid tijd vanaf','Beschikbaarheid tijd t/m']]], ignore_index=True)
+        
         # Subtract constant schedule hours from contract_minutes
         for emp in df_const_unavail['Medewerker id'].unique():
             shift_ids = df_const_unavail[df_const_unavail['Medewerker id']==emp]['shift_id'].dropna().tolist()
@@ -242,14 +300,24 @@ def preprocess_data(df_werknemers: pd.DataFrame, df_onb: pd.DataFrame, prev_assi
     
     # --- onbeschikbaarheid ---
     # Convert 'Datum beschikbaarheid' to datetime
-    df_onb['Datum'] = pd.to_datetime(df_onb['Datum beschikbaarheid'], format='%d-%m-%Y').dt.date
+    df_onb['Datum'] = pd.to_datetime(df_onb['Datum beschikbaarheid'], format='%Y-%m-%d').dt.date
     df_onb['Beschikbaarheid'] = df_onb['Beschikbaarheid'].fillna('Onbekend')
-    df_onb['Beschikbaarheid_tijd_vanaf'] = pd.to_datetime(df_onb['Beschikbaarheid tijd vanaf'], format='%H:%M', errors='coerce').dt.time
-    df_onb['Beschikbaarheid_tijd_tm'] = pd.to_datetime(df_onb['Beschikbaarheid tijd t/m'], format='%H:%M', errors='coerce').dt.time
-    df_onb = df_onb[['Medewerker id', 'Datum', 'Beschikbaarheid', 'Beschikbaarheid_tijd_vanaf', 'Beschikbaarheid_tijd_tm']]
-    df_onb['Medewerker id'] = df_onb['Medewerker id'].astype(str)
+    def ensure_time(x):
+        if isinstance(x, dt.time):
+            return x
+        try:
+            return pd.to_datetime(x, format='%H:%M').time()
+        except:
+            return None
+
+    df_onb['Beschikbaarheid_tijd_vanaf'] = df_onb['Beschikbaarheid tijd vanaf'].apply(ensure_time)
+    df_onb['Beschikbaarheid_tijd_tm'] = df_onb['Beschikbaarheid tijd t/m'].apply(ensure_time)
     
+    #df_onb['Beschikbaarheid_tijd_vanaf'] = pd.to_datetime(df_onb['Beschikbaarheid tijd vanaf'], format='%H:%M', errors='coerce').dt.time
+    #df_onb['Beschikbaarheid_tijd_tm'] = pd.to_datetime(df_onb['Beschikbaarheid tijd t/m'], format='%H:%M', errors='coerce').dt.time
+    df_onb = df_onb[['Medewerker id', 'Datum', 'Beschikbaarheid', 'Beschikbaarheid_tijd_vanaf', 'Beschikbaarheid_tijd_tm']]
     print('Onbeschikbaarheid data loaded')
+
 
     # --- Helper dictionaries ---
     dur_min = shifts.set_index('shift_id')['duration_min'].to_dict()
