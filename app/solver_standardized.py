@@ -756,7 +756,6 @@ def auto_rooster(data, time_limit_s=60):
         unequal_shift_penalties.append(pen_var)
     
     # 7) Equal distribution of amount of shifts per week per employee
-    
     # Keep out Teuna (602859) from this penalty as she has fixed 7-on/7-off pattern
     equal_dist_emp_ids = [e for e in emp_ids if e not in {'602859-1'}]
 
