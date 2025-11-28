@@ -18,7 +18,7 @@ Om de tool te gebruiken, wordt Docker gebruikt om een consistente omgeving te ga
 
 git clone https://github.com/Jagovanlieshout/Gastenhuis_Autorooster.git
 
-cd Hoevelaken_autorooster
+cd Gastenhuis_Autorooster
 
 docker build -t rooster_automaat .
 
