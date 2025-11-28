@@ -15,6 +15,7 @@ Om de tool te gebruiken, wordt Docker gebruikt om een consistente omgeving te ga
 2. Open Docker Desktop en open de ingebouwde terminal. De terminal is aan de rechteronderkant van het scherm te vinden.
 ![alt text](https://github.com/Jagovanlieshout/Gastenhuis_Autorooster/blob/main/Images/Readme_1.png)
 3. In de terminal moet je de volgende commands runnen:
+
 git clone https://github.com/Jagovanlieshout/Gastenhuis_Autorooster.git
 
 cd Hoevelaken_autorooster
