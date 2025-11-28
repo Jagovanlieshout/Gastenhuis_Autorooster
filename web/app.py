@@ -104,7 +104,7 @@ def generate_schedule():
         data = preprocess_data(df_werknemers = workers_df, df_rooster_template = rooster_template_df, df_onb = onb_df, prev_assignments = prev_df, df_vastrooster = vast_rooster_df)
     
         #print("=== SOLVING SCHEDULE ===")
-        result = auto_rooster(data, time_limit_s=60)
+        result = auto_rooster(data, time_limit_s=300)
 
         assignments_df = result["assignments_df"]
 

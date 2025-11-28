@@ -343,8 +343,6 @@ def auto_rooster(data, time_limit_s=60):
         else:
             req_level = int(req_quals)
         
-        print(f"Shift {sid} requires qualification level {req_level}")
-
         for emp in emp_ids:
             emp_level = workers.loc[workers['medewerker_id'] == emp, 'deskundigheid'].iloc[0]
             # employee can only work shift if emp_level <= req_level
@@ -437,7 +435,6 @@ def auto_rooster(data, time_limit_s=60):
         # find last consecutive night block in prev_assignments (dates)
         prev_shift_block = get_last_consecutive_block_dates(prev_assignments, emp, is_night=night)
         period = pattern_length
-        print(f'Previous consecutive night block for {emp}: {prev_shift_block}')
         # compute offset if we have prior info that constitutes a consistent phase
         prev_phase_offset = None
         if prev_shift_block:
@@ -448,9 +445,7 @@ def auto_rooster(data, time_limit_s=60):
             try:
                 base = pd.to_datetime(dates_list[0])
                 prev_first = pd.to_datetime(prev_shift_block[0])
-                print(f'Computing prev_phase_offset for {emp} using base {base.date()} and prev_first {prev_first.date()}')
                 prev_phase_offset = (prev_first - base).days % period
-                print(f'Computed prev_phase_offset for {emp}: {prev_phase_offset}')
             except Exception:
                 prev_phase_offset = None
 
@@ -466,7 +461,6 @@ def auto_rooster(data, time_limit_s=60):
             # enforce exact pattern consistent with prev_phase_offset
             for d in dates_list:
                 pos = ((pd.to_datetime(d) - pd.to_datetime(dates_list[0])).days - prev_phase_offset) % period
-                print(f'Date {d}: pos {pos} for emp {emp}')
                 if pos < on_days:
                     # check if date is in unavailable dates
                     if d in unavailable_dates:
@@ -502,9 +496,8 @@ def auto_rooster(data, time_limit_s=60):
         minc = int(minc) if not pd.isna(minc) else 0
         maxc = int(maxc) if not pd.isna(maxc) else 0
         R = int(rest_after) if not pd.isna(rest_after) else 0
-
-        print(f'Applying standardized consecutive work/rest constraints for employee {emp}: minc={minc}, maxc={maxc}, rest_after={R}')
-
+        
+        print(f'Applying achtereenvolgende diensten for employee {emp}: minc={minc}, maxc={maxc}, rest_after={R}')
         # Create day-level work variables and link to x
         work_day = {}
         for d in dates_list:
@@ -588,7 +581,6 @@ def auto_rooster(data, time_limit_s=60):
     for _, r in shifts.iterrows():
         sid = int(r['shift_id'])
         if r['required'] == 0.5:
-            print(f'Applying reduced uncovered weight for shift {sid} with required={r["required"]}')
             weight = 0.5 
         else:
             weight = 1.0
@@ -932,26 +924,33 @@ def auto_rooster(data, time_limit_s=60):
     
     #11) If qualification has two levels, prefer the first level when possible
     preferred_qualification_bonus = []
+
     for _, shift_row in shifts.iterrows():
         sid = int(shift_row['shift_id'])
-
         req_quals = shift_row['qualification']
-        if isinstance(req_quals, list) and len(req_quals) >= 2:
-            print(f'Applying preferred qualification bonus for shift {sid} with qualifications {req_quals} but preferring level {min(req_quals)}')
+        
+        # Only apply when multiple qualification levels allowed
+        if isinstance(req_quals, list) and len(req_quals) > 1:
             preferred_level = min(req_quals)
-
+            
             for emp in emp_ids:
-                emp_level = workers.loc[workers['medewerker_id'] == emp, 'deskundigheid'].iloc[0]
-
-                # Allowed assignments only (because emp_level ≤ req_level)
-                if min(emp_level) <= max(req_quals):
-                    # Create a bonus variable for this assignment
+                emp_level = workers.loc[workers['medewerker_id'] == emp, 'deskundigheid'].iloc[0][0]
+                
+                # Only employees that satisfy the qualification requirements
+                if emp_level in req_quals:
+                    print(f'Checking preferred qualification bonus for shift {sid}, emp {emp}, emp_level {emp_level}, req_quals {req_quals}')
+                    
+                    # Create bonus var
                     b = model.NewBoolVar(f"preferredQualBonus_s{sid}_e{emp}")
 
-                    # Link bonus to assignment:
-                    model.Add(b <= x[sid, emp])
-                    model.Add(b <= int(emp_level == preferred_level))
-                    model.Add(b >= x[sid, emp] + int(emp_level == preferred_level) - 1)
+                    # If emp has preferred qualification → bonus follows assignment
+                    if emp_level == preferred_level:
+                        model.Add(b == x[sid, emp])
+                        print(f'Preferred qualification bonus applied for shift {sid} and qualification {emp_level} and required {req_quals}')
+                    else:
+                        print(f'No preferred qualification bonus for shift {sid} and qualification {emp_level} and required {req_quals}')
+                        model.Add(b == 0)
+
 
                     preferred_qualification_bonus.append(b)
     
@@ -968,7 +967,7 @@ def auto_rooster(data, time_limit_s=60):
         1 * sum(overig_penalties) -                     # soft penalty for 'overig' night shifts
         0.1 * sum(preferred_shift_bonus) +              # small bonus for preferred shifts
         0.1 * sum(deskundigheid_penalties) -            # soft penalty for higher than required deskundigheid
-        0.01 * sum(preferred_qualification_bonus)        # small bonus for preferred qualification level
+        0.5 * sum(preferred_qualification_bonus)        # small bonus for preferred qualification level
     )
 
     ### Solve ###
@@ -1047,8 +1046,7 @@ def auto_rooster(data, time_limit_s=60):
         print("Total 'overig' shift penalties:", sum(solver.Value(v) for v in overig_penalties))
         print("Total preferred shift bonuses:", sum(solver.Value(v) for v in preferred_shift_bonus))
         print("Total deskundigheid penalties:", sum(solver.Value(v) for v in deskundigheid_penalties))
-        print("Total preferred qualification bonuses:", sum(solver.Value(v) for v in preferred_qualification_bonus))
-        
+        print("Total preferred qualification bonuses:", sum(solver.Value(v) for v in preferred_qualification_bonus))        
                 
         # ---- Debug print for weekly distribution ----
         print("\n--- Weekly shift distribution (balanced) ---")

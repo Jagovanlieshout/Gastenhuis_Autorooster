@@ -39,8 +39,6 @@ def preprocess_data(df_werknemers: pd.DataFrame, df_rooster_template: pd.DataFra
     df_shifts["Begintijd"] = pd.to_datetime(df_shifts["Begintijd"], format="%H:%M:%S").dt.time
     df_shifts["Eindtijd"] = pd.to_datetime(df_shifts["Eindtijd"], format="%H:%M:%S").dt.time
     
-    print(f'Deskundigheid pre parse samples: {df_shifts["Deskundigheid"].head()}')
-
     # if deskundigheid is a string with , split into list of ints, else convert to int (e.g. 1. Verpleegkundige, 2. Verzorgende → [1,2], 2. Verzorgende → [2])
     def parse_desk(x):
         if pd.isna(x):
@@ -54,8 +52,6 @@ def preprocess_data(df_werknemers: pd.DataFrame, df_rooster_template: pd.DataFra
 
     df_shifts["Deskundigheid"] = df_shifts["Deskundigheid"].apply(parse_desk)
     
-    print(f'shift deskundigheid samples: {df_shifts["Deskundigheid"].head()}')
-
     # Compute duration in hours
     df_shifts["Duur"] = (
         pd.to_datetime(df_shifts["Eindtijd"].astype(str)) -
