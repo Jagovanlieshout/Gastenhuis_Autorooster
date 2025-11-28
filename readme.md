@@ -16,11 +16,14 @@ Om de tool te gebruiken, wordt Docker gebruikt om een consistente omgeving te ga
 ![alt text](https://github.com/Jagovanlieshout/Gastenhuis_Autorooster/blob/main/Images/Readme_1.png)
 3. In de terminal moet je de volgende commands runnen:
 git clone https://github.com/Jagovanlieshout/Gastenhuis_Autorooster.git
+
 cd Hoevelaken_autorooster
+
 docker build -t rooster_automaat .
-4. Klik in het menu aan de linkerkant op 'Images' hier zie je nu een image genaamd rooster_automaat staan, dit is wat we zojuist hebben opgezet.
-5. Klik op de start knop aan de rechter kant. Open daarna de 'Optional settings'.
-6. Verander de naam naar rooster_automaat en vul 8000 in bij port. Klik hierna op run.
+
+5. Klik in het menu aan de linkerkant op 'Images' hier zie je nu een image genaamd rooster_automaat staan, dit is wat we zojuist hebben opgezet.
+6. Klik op de start knop aan de rechter kant. Open daarna de 'Optional settings'.
+7. Verander de naam naar rooster_automaat en vul 8000 in bij port. Klik hierna op run.
 ![alt text](https://github.com/Jagovanlieshout/Gastenhuis_Autorooster/blob/main/Images/Readme_2.png)
-7. Open je webbrowser en ga naar http://localhost:8000 om de webinterface van de tool te openen.
+8. Open je webbrowser en ga naar http://localhost:8000 om de webinterface van de tool te openen.
 Veel succes met het gebruik van de Rooster automatiseringstool! 
